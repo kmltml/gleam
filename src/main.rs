@@ -74,7 +74,9 @@ fn main() {
     fov: compute_fov((40.0 as f64).to_radians(), width as f64 / height as f64)
   };
 
-  let img = draw_viewport(&world, &camera, width, height);
+  // let img = draw_viewport(&world, &camera, width, height);
+  let mut img = Image::new(width, height);
+  let mut y = 0;
 
   loop {
     while let Some(event) = window.poll_event() {
@@ -83,6 +85,12 @@ fn main() {
         _ => {}
       }
     }
+
+    if y < height {
+      draw_line(&world, &camera, &mut img, y, width, height);
+      y += 1;
+    }
+
     let tex = Texture::from_image(&img).expect("Couldn't create texture");
     window.draw(&Sprite::with_texture(&tex));
 
@@ -95,6 +103,20 @@ fn compute_fov(fov_x: f64, ratio: f64) -> na::Vector2<f64> {
   let h = w / ratio;
   let fov_y = h.atan();
   na::Vector2::new(fov_x, fov_y)
+}
+
+fn draw_line(world: &World, camera: &Camera, image: &mut Image, y: u32, w: u32, h: u32) {
+  let yf = (y as i32 - h as i32 / 2) as f64 / ((h / 2) as f64);
+  for x in 0 .. w {
+    let xf = (x as i32 - w as i32 / 2) as f64 / ((w / 2) as f64);
+    let mut c = Color(Vector::zeros());
+    let sample_count = 1000;
+    for _ in 0 .. sample_count {
+      c += &cast_ray(world, camera, xf, -yf);
+    }
+    c /= sample_count as f64;
+    image.set_pixel(x, y, sfml::graphics::Color::rgb(f64_to_u8(c.r()), f64_to_u8(c.g()), f64_to_u8(c.b())));
+  }
 }
 
 fn draw_viewport(world: &World, camera: &Camera, w: u32, h: u32) -> Image {
