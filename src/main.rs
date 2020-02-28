@@ -96,6 +96,9 @@ fn main() {
     if y < height {
       draw_line(&world, &camera, &mut img, y, width, height);
       y += 1;
+      if y == height {
+        img.save_to_file("out.png");
+      }
     }
 
     let tex = Texture::from_image(&img).expect("Couldn't create texture");
