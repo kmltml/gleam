@@ -2,6 +2,7 @@ extern crate nalgebra as na;
 extern crate rand;
 extern crate sfml;
 
+use crate::rand::distributions::Distribution;
 use crate::sfml::graphics::RenderTarget;
 use rand::rngs::ThreadRng;
 use rand::Rng;
@@ -22,40 +23,46 @@ fn main() {
         center: Point::new(0.0, -1.0, 4.0),
         radius: 1.0
       }, Material {
-        color: Color(Vector::new(1.0, 1.0, 1.0))
+        color: Color(Vector::new(1.0, 1.0, 1.0)),
+        roughness: 0.01
       }),
       (Shape::Sphere {
         center: Point::new(2.0, -1.0, 4.0),
         radius: 0.25
       }, Material {
-        color: Color(Vector::new(0.5, 0.5, 0.5))
+        color: Color(Vector::new(1.0, 0.5, 0.5)),
+        roughness: 1.0
+      }),
+      (Shape::Sphere {
+        center: Point::new(-2.0, -1.0, 4.0),
+        radius: 0.25
+      }, Material {
+        color: Color(Vector::new(0.5, 1.0, 0.5)),
+        roughness: 1.0
       }),
       (Shape::Plane {
         center: Point::new(0.0, -2.0, 0.0),
         normal: Normal::new_normalize(Vector::new(0.0, 1.0, 0.0))
       }, Material {
-        color: Color(Vector::new(1.0, 0.3, 0.3) * plane_dim)
+        color: Color(Vector::new(1.0, 0.3, 0.3) * plane_dim),
+        roughness: 1.0
       }),
       (Shape::Plane {
         center: Point::new(-6.0, 0.0, 6.0),
         normal: Normal::new_normalize(Vector::new(1.0, 0.0, -1.0))
       }, Material {
-        color: Color(Vector::new(0.3, 1.0, 0.3) * plane_dim)
+        color: Color(Vector::new(0.3, 1.0, 0.3) * plane_dim),
+        roughness: 1.0
       }),
       (Shape::Plane {
         center: Point::new(6.0, 0.0, 6.0),
         normal: Normal::new_normalize(Vector::new(-1.0, 0.0, -1.0))
       }, Material {
-        color: Color(Vector::new(0.3, 0.3, 1.0) * plane_dim)
+        color: Color(Vector::new(0.3, 0.3, 1.0) * plane_dim),
+        roughness: 1.0
       })
     ],
     lights: vec![
-      (Shape::Sphere {
-        center: Point::new(0.0, 1.0, 3.0),
-        radius: 0.1
-      }, Light {
-        color: Color(Vector::new(100.0, 100.0, 100.0))
-      }),
       (Shape::Plane {
         center: Point::new(0.0, 5.0, 0.0),
         normal: Normal::new_normalize(Vector::new(0.0, -1.0, 0.0))
@@ -283,7 +290,8 @@ enum Shape {
 }
 
 struct Material {
-  color: Color
+  color: Color,
+  roughness: f64
 }
 
 struct World {
@@ -323,6 +331,10 @@ impl Shape {
             None
           } else {
             let point = ray.origin + t * ray.direction;
+            let normal_angle = self.normal(&point).dot(&ray.direction);
+            if normal_angle > 0.0 {
+              return None;
+            }
             Some((t, point))
           }
         } else {
@@ -347,6 +359,9 @@ impl Shape {
         if (center - point).dot(normal).abs() >= 0.001 {
           println!("wrong dot on plane intersection {}", (center - point).dot(normal));
         }
+        if d_dot_n >= 0.0 {
+          return None;
+        }
         Some((t, point))
       }
     }
@@ -369,7 +384,24 @@ impl Ray {
     let normal_part = (self.direction.dot(normal)) * normal.as_ref();
     let reflected_part = self.direction - normal_part;
     self.direction = -normal_part + reflected_part;
-    self.direction += Vector::new(random.gen_range(-0.01, 0.01), random.gen_range(-0.01, 0.01), random.gen_range(-0.01, 0.01));
+
+    let axis = self.direction.cross(&Vector::x_axis());
+    let angle = self.direction.x.acos();
+    let transform = na::Rotation3::from_axis_angle(&na::Unit::new_normalize(-axis), angle);
+
+    let distr = rand::distributions::Normal::new(0.0, material.roughness);
+    loop {
+      let theta = distr.sample(random);
+      let phi = random.gen_range(0.0, 2.0 * std::f64::consts::PI);
+
+      let dir_pre = Vector::new(theta.cos(), theta.sin() * phi.sin(), theta.sin() * phi.cos());
+      let direction = transform * dir_pre;
+      if direction.dot(normal) > 0.0 {
+        self.direction = direction;
+        break;
+      }
+    }
+
     self.color *= &material.color;
     self.origin = *point;
   }
