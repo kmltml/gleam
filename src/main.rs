@@ -2,6 +2,9 @@ extern crate nalgebra as na;
 extern crate rand;
 extern crate sfml;
 
+use std::sync::{mpsc, Arc};
+use std::thread;
+use std::time::Instant;
 use crate::rand::distributions::Distribution;
 use crate::sfml::graphics::RenderTarget;
 use rand::rngs::ThreadRng;
@@ -17,7 +20,7 @@ fn main() {
 
   let plane_dim = 0.9;
 
-  let world = World {
+  let world = Arc::new(World {
     shapes: vec![
       (Shape::Sphere {
         center: Point::new(0.0, -1.0, 4.0),
@@ -70,20 +73,24 @@ fn main() {
         color: Color(Vector::new(1.0, 1.0, 1.0))
       })
     ]
-  };
+  });
 
-  let camera = Camera {
+  let camera = Arc::new(Camera {
     ray: Ray {
       origin: Point::new(0.0, 0.0, 0.0),
       direction: Vector::new(0.0, 0.0, 1.0),
       color: Color(Vector::zeros())
     },
     fov: compute_fov((40.0 as f64).to_radians(), width as f64 / height as f64)
-  };
+  });
 
-  // let img = draw_viewport(&world, &camera, width, height);
   let mut img = Image::new(width, height);
-  let mut y = 0;
+
+  let start_time = Instant::now();
+
+  let thread_count = 8;
+  let rx = spawn_threads(thread_count, world, camera, width, height);
+  let mut closed_threads = 0;
 
   loop {
     while let Some(event) = window.poll_event() {
@@ -93,11 +100,22 @@ fn main() {
       }
     }
 
-    if y < height {
-      draw_line(&world, &camera, &mut img, y, width, height);
-      y += 1;
-      if y == height {
+    while let Result::Ok(msg) = rx.try_recv() {
+      match msg {
+        ThreadMessage::Line { line_index, pixels } => {
+          for (x, c) in pixels.into_iter().enumerate() {
+            img.set_pixel(x as u32, line_index, c);
+          }
+        },
+        ThreadMessage::Done => {
+          closed_threads += 1;
+          if closed_threads == thread_count {
+            let end_time = Instant::now();
+            let elapsed = end_time - start_time;
+            println!("Time elapsed: {}ms", elapsed.as_millis());
         img.save_to_file("out.png");
+      }
+    }
       }
     }
 
@@ -115,7 +133,37 @@ fn compute_fov(fov_x: f64, ratio: f64) -> na::Vector2<f64> {
   na::Vector2::new(fov_x, fov_y)
 }
 
-fn draw_line(world: &World, camera: &Camera, image: &mut Image, y: u32, w: u32, h: u32) {
+enum ThreadMessage {
+  Line {
+    line_index: u32,
+    pixels: Vec<sfml::graphics::Color>
+  },
+  Done
+}
+
+fn spawn_threads(thread_count: usize, world: Arc<World>, camera: Arc<Camera>, w: u32, h: u32) -> mpsc::Receiver<ThreadMessage> {
+  let (tx, rx) = mpsc::channel();
+  for i in 0 .. thread_count {
+    let cloned_tx = mpsc::Sender::clone(&tx);
+    let world = world.clone();
+    let camera = camera.clone();
+    thread::spawn(move || {
+      for y in (i as u32 .. h).step_by(thread_count) {
+        let line = draw_line(world.as_ref(), camera.as_ref(), y , w, h);
+        cloned_tx.send(ThreadMessage::Line {
+          line_index: y,
+          pixels: line
+        }).expect("Failed to send thread processing result");
+      }
+      cloned_tx.send(ThreadMessage::Done).expect("Couldn't signal end of processing");
+    });
+  }
+  rx
+}
+
+fn draw_line(world: &World, camera: &Camera, y: u32, w: u32, h: u32) -> Vec<sfml::graphics::Color> {
+  let mut line = Vec::with_capacity(w as usize);
+
   let yf = (y as i32 - h as i32 / 2) as f64 / ((h / 2) as f64);
   for x in 0 .. w {
     let xf = (x as i32 - w as i32 / 2) as f64 / ((w / 2) as f64);
@@ -125,27 +173,9 @@ fn draw_line(world: &World, camera: &Camera, image: &mut Image, y: u32, w: u32, 
       c += &cast_ray(world, camera, xf, -yf);
     }
     c /= sample_count as f64;
-    image.set_pixel(x, y, sfml::graphics::Color::rgb(f64_to_u8(c.r()), f64_to_u8(c.g()), f64_to_u8(c.b())));
+    line.push(sfml::graphics::Color::rgb(f64_to_u8(c.r()), f64_to_u8(c.g()), f64_to_u8(c.b())));
   }
-}
-
-fn draw_viewport(world: &World, camera: &Camera, w: u32, h: u32) -> Image {
-  let mut image = Image::new(w, h);
-  for x in 0 .. w {
-    println!("x = {} / {}", x, w);
-    for y in 0 .. h {
-      let xf = (x as i32 - w as i32 / 2) as f64 / ((w / 2) as f64);
-      let yf = (y as i32 - h as i32 / 2) as f64 / ((h / 2) as f64);
-      let mut c = Color(Vector::zeros());
-      let sample_count = 100;
-      for _ in 0 .. sample_count {
-        c += &cast_ray(world, camera, xf, -yf);
-      }
-      c /= sample_count as f64;
-      image.set_pixel(x, y, sfml::graphics::Color::rgb(f64_to_u8(c.r()), f64_to_u8(c.g()), f64_to_u8(c.b())));
-    }
-  }
-  image
+  line
 }
 
 fn f64_to_u8(f: f64) -> u8 {
@@ -388,9 +418,9 @@ impl Ray {
     let reflected_part = self.direction - normal_part;
     self.direction = -normal_part + reflected_part;
 
-    let axis = self.direction.cross(&Vector::x_axis());
+    let axis = Vector::x_axis().cross(&self.direction);
     let angle = self.direction.x.acos();
-    let transform = na::Rotation3::from_axis_angle(&na::Unit::new_normalize(-axis), angle);
+    let transform = na::Rotation3::from_axis_angle(&na::Unit::new_normalize(axis), angle);
 
     let distr = rand::distributions::Normal::new(0.0, material.roughness);
     loop {
