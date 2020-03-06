@@ -1,6 +1,9 @@
 extern crate nalgebra as na;
 extern crate rand;
 extern crate sfml;
+extern crate regex;
+
+mod obj;
 
 use std::sync::{mpsc, Arc};
 use std::thread;
@@ -20,59 +23,39 @@ fn main() {
 
   let plane_dim = 0.9;
 
+  let monkey = obj::parse_file(&std::fs::File::open("monkey.obj").unwrap()).unwrap();
+
+  let shapes = vec![
+    (Shape::Plane {
+      center: Point::new(0.0, -2.0, 0.0),
+      normal: Normal::new_normalize(Vector::new(0.0, 1.0, 0.0))
+    }, Material {
+      color: Color(Vector::new(1.0, 0.3, 0.3) * plane_dim),
+      roughness: 1.0
+    }),
+    (Shape::Plane {
+      center: Point::new(-6.0, 0.0, 6.0),
+      normal: Normal::new_normalize(Vector::new(1.0, 0.0, -1.0))
+    }, Material {
+      color: Color(Vector::new(0.3, 1.0, 0.3) * plane_dim),
+      roughness: 1.0
+    }),
+    (Shape::Plane {
+      center: Point::new(6.0, 0.0, 6.0),
+      normal: Normal::new_normalize(Vector::new(-1.0, 0.0, -1.0))
+    }, Material {
+      color: Color(Vector::new(0.3, 0.3, 1.0) * plane_dim),
+      roughness: 1.0
+    })
+  ].into_iter().chain(monkey.into_iter().map(|triangle| {
+    (Shape::new_triangle(triangle), Material {
+      color: Color(Vector::new(0.8, 0.8, 0.8)),
+      roughness: 0.1
+    })
+  })).collect();
+
   let world = Arc::new(World {
-    shapes: vec![
-      (Shape::Sphere {
-        center: Point::new(0.0, -1.0, 4.0),
-        radius: 1.0
-      }, Material {
-        color: Color(Vector::new(1.0, 1.0, 1.0)),
-        roughness: 0.01
-      }),
-      (Shape::Sphere {
-        center: Point::new(2.0, -1.0, 4.0),
-        radius: 0.25
-      }, Material {
-        color: Color(Vector::new(1.0, 0.5, 0.5)),
-        roughness: 1.0
-      }),
-      (Shape::Sphere {
-        center: Point::new(-2.0, -1.0, 4.0),
-        radius: 0.25
-      }, Material {
-        color: Color(Vector::new(0.5, 1.0, 0.5)),
-        roughness: 1.0
-      }),
-      (Shape::Plane {
-        center: Point::new(0.0, -2.0, 0.0),
-        normal: Normal::new_normalize(Vector::new(0.0, 1.0, 0.0))
-      }, Material {
-        color: Color(Vector::new(1.0, 0.3, 0.3) * plane_dim),
-        roughness: 1.0
-      }),
-      (Shape::Plane {
-        center: Point::new(-6.0, 0.0, 6.0),
-        normal: Normal::new_normalize(Vector::new(1.0, 0.0, -1.0))
-      }, Material {
-        color: Color(Vector::new(0.3, 1.0, 0.3) * plane_dim),
-        roughness: 1.0
-      }),
-      (Shape::Plane {
-        center: Point::new(6.0, 0.0, 6.0),
-        normal: Normal::new_normalize(Vector::new(-1.0, 0.0, -1.0))
-      }, Material {
-        color: Color(Vector::new(0.3, 0.3, 1.0) * plane_dim),
-        roughness: 1.0
-      }),
-      (Shape::new_triangle([
-        Point::new(-5.0, -2.0, 7.0),
-        Point::new(5.0, -2.0, 7.0),
-        Point::new(0.0, 0.0, 12.0),
-      ]), Material {
-        color: Color(Vector::new(1.0, 1.0, 1.0)),
-        roughness: 0.01
-      })
-    ],
+    shapes: shapes,
     lights: vec![
       (Shape::Plane {
         center: Point::new(0.0, 5.0, 0.0),
@@ -176,7 +159,7 @@ fn draw_line(world: &World, camera: &Camera, y: u32, w: u32, h: u32) -> Vec<sfml
   for x in 0 .. w {
     let xf = (x as i32 - w as i32 / 2) as f64 / ((w / 2) as f64);
     let mut c = Color(Vector::zeros());
-    let sample_count = 500;
+    let sample_count = 64;
     for _ in 0 .. sample_count {
       c += &cast_ray(world, camera, xf, -yf);
     }
