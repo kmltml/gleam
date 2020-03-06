@@ -63,6 +63,14 @@ fn main() {
       }, Material {
         color: Color(Vector::new(0.3, 0.3, 1.0) * plane_dim),
         roughness: 1.0
+      }),
+      (Shape::new_triangle([
+        Point::new(-5.0, -2.0, 7.0),
+        Point::new(5.0, -2.0, 7.0),
+        Point::new(0.0, 0.0, 12.0),
+      ]), Material {
+        color: Color(Vector::new(1.0, 1.0, 1.0)),
+        roughness: 0.01
       })
     ],
     lights: vec![
@@ -168,7 +176,7 @@ fn draw_line(world: &World, camera: &Camera, y: u32, w: u32, h: u32) -> Vec<sfml
   for x in 0 .. w {
     let xf = (x as i32 - w as i32 / 2) as f64 / ((w / 2) as f64);
     let mut c = Color(Vector::zeros());
-    let sample_count = 1000;
+    let sample_count = 500;
     for _ in 0 .. sample_count {
       c += &cast_ray(world, camera, xf, -yf);
     }
@@ -319,6 +327,11 @@ enum Shape {
   Plane {
     center: Point,
     normal: Normal
+  },
+  Triangle {
+    vertices: [Point; 3],
+    normal: Normal,
+    uv_matrix: na::Matrix3<f64>
   }
 }
 
@@ -337,6 +350,20 @@ struct Light {
 }
 
 impl Shape {
+
+  fn new_triangle(vertices: [Point; 3]) -> Shape {
+    let normal = (vertices[1] - vertices[0]).cross(&(vertices[2] - vertices[0])).normalize();
+    let uv_matrix = na::Matrix3::from_columns(&[
+          vertices[1] - vertices[0],
+          vertices[2] - vertices[0],
+          normal
+        ]).try_inverse().expect("A weird triangle found");
+    Shape::Triangle {
+      vertices,
+      normal: Normal::new_normalize(normal),
+      uv_matrix
+    }
+  }
 
   fn intersect(&self, ray: &Ray) -> Option<(f64, na::Point3<f64>)> {
     match self {
@@ -397,6 +424,23 @@ impl Shape {
         }
         Some((t, point))
       }
+      Shape::Triangle { vertices, normal, uv_matrix } => {
+        let d_dot_n = ray.direction.dot(&normal);
+        if d_dot_n.abs() <= 0.01 {
+          return None
+        }
+        let t = (vertices[1] - ray.origin).dot(&normal) / d_dot_n;
+        if t <= 0.001 {
+          return None
+        }
+        let point = ray.origin + t * ray.direction;
+        let uv = uv_matrix * (point - vertices[0]);
+        if uv.x >= 0.0 && uv.y >= 0.0 && uv.x + uv.y <= 1.0 {
+          Some((t, point))
+        } else {
+          None
+        }
+      }
     }
   }
 
@@ -406,6 +450,8 @@ impl Shape {
         na::Unit::new_normalize(point - center),
       Shape::Plane { normal, .. } =>
         *normal,
+      Shape::Triangle { normal, .. } =>
+        *normal
     }
   }
 
@@ -423,14 +469,21 @@ impl Ray {
     let transform = na::Rotation3::from_axis_angle(&na::Unit::new_normalize(axis), angle);
 
     let distr = rand::distributions::Normal::new(0.0, material.roughness);
+    let mut attempts = 0;
     loop {
       let theta = distr.sample(random);
       let phi = random.gen_range(0.0, 2.0 * std::f64::consts::PI);
 
       let dir_pre = Vector::new(theta.cos(), theta.sin() * phi.sin(), theta.sin() * phi.cos());
       let direction = transform * dir_pre;
-      if direction.dot(normal) > 0.0 {
+      if direction.dot(normal).signum() == self.direction.dot(normal).signum() {
         self.direction = direction;
+        break;
+      }
+
+      attempts += 1;
+      if attempts >= 100 {
+        println!("Couldn't generate a random ray");
         break;
       }
     }
