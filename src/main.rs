@@ -4,6 +4,10 @@ extern crate sfml;
 extern crate regex;
 
 mod obj;
+mod kdtree;
+
+use std::cell::Cell;
+use kdtree::KDTree;
 
 use std::sync::{mpsc, Arc};
 use std::thread;
@@ -24,6 +28,7 @@ fn main() {
   let plane_dim = 0.9;
 
   let monkey = obj::parse_file(&std::fs::File::open("monkey.obj").unwrap()).unwrap();
+  let monkey_mesh = Shape::new_mesh(monkey);
 
   let shapes = vec![
     (Shape::Plane {
@@ -46,13 +51,12 @@ fn main() {
     }, Material {
       color: Color(Vector::new(0.3, 0.3, 1.0) * plane_dim),
       roughness: 1.0
+    }),
+    (monkey_mesh, Material {
+      color: Color(Vector::new(1.0, 1.0, 1.0)),
+      roughness: 0.5
     })
-  ].into_iter().chain(monkey.into_iter().map(|triangle| {
-    (Shape::new_triangle(triangle), Material {
-      color: Color(Vector::new(0.8, 0.8, 0.8)),
-      roughness: 0.1
-    })
-  })).collect();
+  ];
 
   let world = Arc::new(World {
     shapes: shapes,
@@ -104,9 +108,9 @@ fn main() {
             let end_time = Instant::now();
             let elapsed = end_time - start_time;
             println!("Time elapsed: {}ms", elapsed.as_millis());
-        img.save_to_file("out.png");
-      }
-    }
+            img.save_to_file("out.png");
+          }
+        }
       }
     }
 
@@ -152,20 +156,29 @@ fn spawn_threads(thread_count: usize, world: Arc<World>, camera: Arc<Camera>, w:
   rx
 }
 
+thread_local! {
+  static mesh_candidates: Cell<u64> = Cell::new(0)
+}
+
 fn draw_line(world: &World, camera: &Camera, y: u32, w: u32, h: u32) -> Vec<sfml::graphics::Color> {
   let mut line = Vec::with_capacity(w as usize);
+
+  let sample_count = 128;
 
   let yf = (y as i32 - h as i32 / 2) as f64 / ((h / 2) as f64);
   for x in 0 .. w {
     let xf = (x as i32 - w as i32 / 2) as f64 / ((w / 2) as f64);
     let mut c = Color(Vector::zeros());
-    let sample_count = 64;
     for _ in 0 .. sample_count {
       c += &cast_ray(world, camera, xf, -yf);
     }
     c /= sample_count as f64;
     line.push(sfml::graphics::Color::rgb(f64_to_u8(c.r()), f64_to_u8(c.g()), f64_to_u8(c.b())));
   }
+  mesh_candidates.with(|c| {
+    println!("{}", c.get() / (sample_count * w) as u64);
+    c.set(0)
+  });
   line
 }
 
@@ -187,27 +200,27 @@ fn cast_ray(world: &World, camera: &Camera, x: f64, y: f64) -> Color {
     color: Color(Vector::new(1.0, 1.0, 1.0))
   };
   for _ in 1..50 {
-    let mut shape: Option<(f64, Point, &Shape, &Material)> = None;
+    let mut shape: Option<(Intersection, &Material)> = None;
     for (s, m) in &world.shapes {
-      if let Some((d, p)) = s.intersect(&ray) {
+      if let Some(intersection) = s.intersect(&ray) {
         let swap = match shape {
           None => true,
-          Some((old_distance, _, _, _)) => old_distance > d
+          Some((ref old_int, _)) => old_int.distance > intersection.distance
         };
         if swap {
-          shape = Some((d, p, s, m));
+          shape = Some((intersection, m));
         }
       }
     }
     let mut light: Option<(f64, &Light)> = None;
     for (s, l) in &world.lights {
-      if let Some((d, _)) = s.intersect(&ray) {
+      if let Some(int) = s.intersect(&ray) {
         let swap = match light {
           None => true,
-          Some((old_distance, _)) => old_distance > d
+          Some((old_distance, _)) => old_distance > int.distance
         };
         if swap {
-          light = Some((d, l));
+          light = Some((int.distance, l));
         }
       }
     }
@@ -215,16 +228,16 @@ fn cast_ray(world: &World, camera: &Camera, x: f64, y: f64) -> Color {
       (None, None) => {
         return Color(Vector::zeros())
       },
-      (Some((_, p, s, m)), None) => {
-        ray.reflect(&p, &s.normal(&p), m, &mut rand::thread_rng());
+      (Some((int, m)), None) => {
+        ray.reflect(&int.point, &int.normal, m, &mut rand::thread_rng());
       }
       (None, Some((_, l))) => {
         ray.color *= &l.color;
         return ray.color;
       }
-      (Some((ds, p, s, m)), Some((dl, l))) =>
-        if ds < dl {
-          ray.reflect(&p, &s.normal(&p), m, &mut rand::thread_rng());
+      (Some((int, m)), Some((dl, l))) =>
+        if int.distance < dl {
+          ray.reflect(&int.point, &int.normal, m, &mut rand::thread_rng());
         } else {
           ray.color *= &l.color;
           return ray.color;
@@ -239,6 +252,7 @@ type Point = na::Point3<f64>;
 type Vector = na::Vector3<f64>;
 type Normal = na::Unit<Vector>;
 
+#[derive(Debug)]
 struct Color(Vector);
 
 impl Color {
@@ -290,6 +304,7 @@ impl ops::AddAssign<&Color> for Color {
 
 }
 
+#[derive(Debug)]
 struct Ray {
   origin: Point,
   direction: Vector,
@@ -299,6 +314,13 @@ struct Ray {
 struct Camera {
   ray: Ray,
   fov: na::Vector2<f64>
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct Triangle {
+  vertices: [Point; 3],
+  normal: Normal,
+  uv_matrix: na::Matrix3<f64>
 }
 
 #[derive(Debug)]
@@ -311,10 +333,9 @@ enum Shape {
     center: Point,
     normal: Normal
   },
-  Triangle {
-    vertices: [Point; 3],
-    normal: Normal,
-    uv_matrix: na::Matrix3<f64>
+  Triangle(Triangle),
+  Mesh {
+    tree: KDTree,
   }
 }
 
@@ -332,23 +353,64 @@ struct Light {
   color: Color
 }
 
-impl Shape {
+#[derive(Debug)]
+struct Intersection {
+  point: Point,
+  distance: f64,
+  normal: Normal
+}
 
-  fn new_triangle(vertices: [Point; 3]) -> Shape {
+impl Triangle {
+
+  fn new(vertices: [Point; 3]) -> Triangle {
     let normal = (vertices[1] - vertices[0]).cross(&(vertices[2] - vertices[0])).normalize();
     let uv_matrix = na::Matrix3::from_columns(&[
           vertices[1] - vertices[0],
           vertices[2] - vertices[0],
           normal
         ]).try_inverse().expect("A weird triangle found");
-    Shape::Triangle {
+    Triangle {
       vertices,
       normal: Normal::new_normalize(normal),
       uv_matrix
     }
   }
 
-  fn intersect(&self, ray: &Ray) -> Option<(f64, na::Point3<f64>)> {
+  fn intersect(&self, ray: &Ray) -> Option<Intersection> {
+    let Triangle { ref vertices, ref normal, ref uv_matrix } = self;
+    let d_dot_n = ray.direction.dot(&normal);
+    if d_dot_n.abs() <= 0.01 {
+      return None
+    }
+    let t = (vertices[1] - ray.origin).dot(&normal) / d_dot_n;
+    if t <= 0.001 {
+      return None
+    }
+    let point = ray.origin + t * ray.direction;
+    let uv = uv_matrix * (point - vertices[0]);
+    if uv.x >= 0.0 && uv.y >= 0.0 && uv.x + uv.y <= 1.0 {
+      Some(Intersection { point, normal: *normal, distance: t })
+    } else {
+      None
+    }
+  }
+
+}
+
+impl Shape {
+
+  fn new_triangle(vertices: [Point; 3]) -> Shape {
+    Shape::Triangle(Triangle::new(vertices))
+  }
+
+  fn new_mesh(triangles: Vec<[Point; 3]>) -> Shape {
+    let triangles: Vec<Triangle> = triangles.into_iter().map(|v| Triangle::new(v)).collect();
+    Shape::Mesh {
+      tree: KDTree::build(&triangles)
+    }
+  }
+
+  fn intersect(&self, ray: &Ray) -> Option<Intersection> {
     match self {
       Shape::Sphere { center, radius } => {
         // |o + t * d - c|^2 = radius^2
@@ -374,11 +436,12 @@ impl Shape {
             None
           } else {
             let point = ray.origin + t * ray.direction;
-            let normal_angle = self.normal(&point).dot(&ray.direction);
+            let normal = na::Unit::new_normalize(point - center);
+            let normal_angle = normal.dot(&ray.direction);
             if normal_angle > 0.0 {
               return None;
             }
-            Some((t, point))
+            Some(Intersection { point, normal, distance: t })
           }
         } else {
           None
@@ -405,24 +468,22 @@ impl Shape {
         if d_dot_n >= 0.0 {
           return None;
         }
-        Some((t, point))
+        Some(Intersection { point, normal: *normal, distance: t })
       }
-      Shape::Triangle { vertices, normal, uv_matrix } => {
-        let d_dot_n = ray.direction.dot(&normal);
-        if d_dot_n.abs() <= 0.01 {
-          return None
-        }
-        let t = (vertices[1] - ray.origin).dot(&normal) / d_dot_n;
-        if t <= 0.001 {
-          return None
-        }
-        let point = ray.origin + t * ray.direction;
-        let uv = uv_matrix * (point - vertices[0]);
-        if uv.x >= 0.0 && uv.y >= 0.0 && uv.x + uv.y <= 1.0 {
-          Some((t, point))
-        } else {
-          None
-        }
+      Shape::Triangle(ref triangle) => {
+        triangle.intersect(ray)
+      }
+      Shape::Mesh { ref tree } => {
+        let candidates = tree.intersect(ray);
+        let candidate_count = candidates.len();
+        let mut hits: Vec<Intersection> = candidates.into_iter().filter_map(|t| {
+          t.intersect(ray)
+        }).collect();
+        hits.sort_by(|a, b| a.distance.partial_cmp(&b.distance).unwrap());
+        mesh_candidates.with(|c| {
+          c.set(c.get() + candidate_count as u64)
+        });
+        hits.into_iter().next()
       }
     }
   }
@@ -433,8 +494,10 @@ impl Shape {
         na::Unit::new_normalize(point - center),
       Shape::Plane { normal, .. } =>
         *normal,
-      Shape::Triangle { normal, .. } =>
-        *normal
+      Shape::Triangle(Triangle { normal, .. }) =>
+        *normal,
+      Shape::Mesh { .. } =>
+        todo!()
     }
   }
 
