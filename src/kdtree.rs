@@ -122,9 +122,9 @@ impl Bounds {
           };
           if swap {
             min_t = Some(t);
+          }
         }
       }
-    }
     }
     min_t
   }
@@ -253,7 +253,7 @@ impl KDTree {
 
   pub fn print_structure(&self) {
     self.root.print_structure()
-      }
+  }
 
   pub fn intersect(&self, ray: &Ray) -> Option<Intersection> {
 

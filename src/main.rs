@@ -27,8 +27,12 @@ fn main() {
 
   let plane_dim = 0.9;
 
-  let monkey = obj::parse_file(&std::fs::File::open("monkey.obj").unwrap()).unwrap();
-  let monkey_mesh = Shape::new_mesh(monkey);
+  let mesh = obj::parse_file(&std::fs::File::open("teapot.obj").unwrap()).unwrap();
+  let mesh_shape = Shape::new_mesh(mesh);
+  if let Shape::Mesh { ref tree } = mesh_shape {
+    tree.print_structure();
+    println!();
+  }
 
   let shapes = vec![
     (Shape::Plane {
@@ -52,9 +56,12 @@ fn main() {
       color: Color(Vector::new(0.3, 0.3, 1.0) * plane_dim),
       roughness: 1.0
     }),
-    (monkey_mesh, Material {
+    (Shape::Transform {
+      matrix: na::convert(na::Translation3::from(Vector::new(0.0, -2.0, 8.0))),
+      child: Box::new(mesh_shape)
+    }, Material {
       color: Color(Vector::new(1.0, 1.0, 1.0)),
-      roughness: 0.5
+      roughness: 0.2
     })
   ];
 
@@ -83,7 +90,7 @@ fn main() {
 
   let start_time = Instant::now();
 
-  let thread_count = 8;
+  let thread_count = 32;
   let rx = spawn_threads(thread_count, world, camera, width, height);
   let mut closed_threads = 0;
 
@@ -336,6 +343,10 @@ enum Shape {
   Triangle(Triangle),
   Mesh {
     tree: KDTree,
+  },
+  Transform {
+    matrix: na::Affine3<f64>,
+    child: Box<Shape>
   }
 }
 
@@ -477,6 +488,24 @@ impl Shape {
       }
       Shape::Mesh { ref tree } => {
         tree.intersect(ray)
+      },
+      Shape::Transform { ref matrix, ref child } => {
+        let inv = matrix.inverse();
+        let res = child.intersect(&Ray {
+          origin: inv * ray.origin,
+          direction: inv * ray.direction,
+          color: Color(Vector::zeros())
+        });
+        match res {
+          None => None,
+          Some(hit) => {
+            Some(Intersection {
+              point: matrix * hit.point,
+              distance: hit.distance,
+              normal: Normal::new_normalize(matrix * hit.normal.as_ref())
+            })
+          }
+        }
       }
     }
   }
@@ -489,7 +518,7 @@ impl Shape {
         *normal,
       Shape::Triangle(Triangle { normal, .. }) =>
         *normal,
-      Shape::Mesh { .. } =>
+      Shape::Mesh { .. } | Shape::Transform { .. } =>
         todo!()
     }
   }
