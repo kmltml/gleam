@@ -1,4 +1,4 @@
-use super::{ Ray, Triangle, Intersection };
+use super::{ Intersection, Ray, Triangle, Vertex };
 
 type Point = na::geometry::Point3<f64>;
 
@@ -82,10 +82,25 @@ impl Bounds {
     Bounds { min, max }
   }
 
+  fn for_vertices(vertices: &[Vertex]) -> Bounds {
+    let mut min = vertices[0].position;
+    let mut max = vertices[0].position;
+    for Vertex { position: p, .. } in vertices.iter().skip(1) {
+      min.x = min.x.min(p.x);
+      min.y = min.y.min(p.y);
+      min.z = min.z.min(p.z);
+
+      max.x = max.x.max(p.x);
+      max.y = max.y.max(p.y);
+      max.z = max.z.max(p.z);
+    }
+    Bounds { min, max }
+  }
+
   fn for_triangles(triangles: &[Triangle]) -> Bounds {
-    let mut ret = Bounds::for_points(&triangles[0].vertices);
+    let mut ret = Bounds::for_vertices(&triangles[0].vertices);
     for t in triangles.iter().skip(1) {
-      ret = ret.union(&Bounds::for_points(&t.vertices))
+      ret = ret.union(&Bounds::for_vertices(&t.vertices))
     }
     ret
   }

@@ -57,7 +57,10 @@ fn main() {
       roughness: 1.0
     }),
     (Shape::Transform {
-      matrix: na::convert(na::Translation3::from(Vector::new(0.0, -2.0, 8.0))),
+      matrix: na::convert(
+        na::Translation3::from(Vector::new(0.0, -2.0, 8.0)) *
+          na::Rotation3::new(Vector::new(0.0, -std::f64::consts::PI / 2.0, 0.0))
+      ),
       child: Box::new(mesh_shape)
     }, Material {
       color: Color(Vector::new(1.0, 1.0, 1.0)),
@@ -170,7 +173,7 @@ thread_local! {
 fn draw_line(world: &World, camera: &Camera, y: u32, w: u32, h: u32) -> Vec<sfml::graphics::Color> {
   let mut line = Vec::with_capacity(w as usize);
 
-  let sample_count = 16;
+  let sample_count = 256;
 
   let yf = (y as i32 - h as i32 / 2) as f64 / ((h / 2) as f64);
   for x in 0 .. w {
@@ -324,8 +327,14 @@ struct Camera {
 }
 
 #[derive(Debug, Clone, Copy)]
+pub struct Vertex {
+  position: Point,
+  normal: Option<Normal>
+}
+
+#[derive(Debug, Clone, Copy)]
 pub struct Triangle {
-  vertices: [Point; 3],
+  vertices: [Vertex; 3],
   normal: Normal,
   uv_matrix: na::Matrix3<f64>
 }
@@ -373,11 +382,11 @@ struct Intersection {
 
 impl Triangle {
 
-  fn new(vertices: [Point; 3]) -> Triangle {
-    let normal = (vertices[1] - vertices[0]).cross(&(vertices[2] - vertices[0])).normalize();
+  fn new(vertices: [Vertex; 3]) -> Triangle {
+    let normal = (vertices[1].position - vertices[0].position).cross(&(vertices[2].position - vertices[0].position)).normalize();
     let uv_matrix = na::Matrix3::from_columns(&[
-          vertices[1] - vertices[0],
-          vertices[2] - vertices[0],
+          vertices[1].position - vertices[0].position,
+          vertices[2].position - vertices[0].position,
           normal
         ]).try_inverse().expect("A weird triangle found");
     Triangle {
@@ -396,14 +405,23 @@ impl Triangle {
     if d_dot_n.abs() <= 0.01 {
       return None
     }
-    let t = (vertices[1] - ray.origin).dot(&normal) / d_dot_n;
+    let t = (vertices[1].position - ray.origin).dot(&normal) / d_dot_n;
     if t <= 0.001 {
       return None
     }
     let point = ray.origin + t * ray.direction;
-    let uv = uv_matrix * (point - vertices[0]);
+    let uv = uv_matrix * (point - vertices[0].position);
     if uv.x >= 0.0 && uv.y >= 0.0 && uv.x + uv.y <= 1.0 {
-      Some(Intersection { point, normal: *normal, distance: t })
+      let loc_normal = match (vertices[0].normal, vertices[1].normal, vertices[2].normal) {
+        (Some(n0), Some(n1), Some(n2)) => {
+          let v = n0.as_ref() * (1.0 - uv.x - uv.y) +
+            n1.as_ref() * uv.x +
+            n2.as_ref() * uv.y;
+          Normal::new_normalize(v)
+        },
+        _ => *normal
+      };
+      Some(Intersection { point, normal: loc_normal, distance: t })
     } else {
       None
     }
@@ -413,7 +431,7 @@ impl Triangle {
 
 impl Shape {
 
-  fn new_triangle(vertices: [Point; 3]) -> Shape {
+  fn new_triangle(vertices: [Vertex; 3]) -> Shape {
     Shape::Triangle(Triangle::new(vertices))
   }
 
