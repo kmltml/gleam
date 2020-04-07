@@ -163,7 +163,7 @@ thread_local! {
 fn draw_line(world: &World, camera: &Camera, y: u32, w: u32, h: u32) -> Vec<sfml::graphics::Color> {
   let mut line = Vec::with_capacity(w as usize);
 
-  let sample_count = 128;
+  let sample_count = 16;
 
   let yf = (y as i32 - h as i32 / 2) as f64 / ((h / 2) as f64);
   for x in 0 .. w {
@@ -377,6 +377,9 @@ impl Triangle {
   }
 
   fn intersect(&self, ray: &Ray) -> Option<Intersection> {
+    mesh_candidates.with(|c| {
+      c.set(c.get() + 1)
+    });
     let Triangle { ref vertices, ref normal, ref uv_matrix } = self;
     let d_dot_n = ray.direction.dot(&normal);
     if d_dot_n.abs() <= 0.01 {
@@ -403,8 +406,7 @@ impl Shape {
     Shape::Triangle(Triangle::new(vertices))
   }
 
-  fn new_mesh(triangles: Vec<[Point; 3]>) -> Shape {
-    let triangles: Vec<Triangle> = triangles.into_iter().map(|v| Triangle::new(v)).collect();
+  fn new_mesh(triangles: Vec<Triangle>) -> Shape {
     Shape::Mesh {
       tree: KDTree::build(&triangles)
     }
@@ -474,16 +476,7 @@ impl Shape {
         triangle.intersect(ray)
       }
       Shape::Mesh { ref tree } => {
-        let candidates = tree.intersect(ray);
-        let candidate_count = candidates.len();
-        let mut hits: Vec<Intersection> = candidates.into_iter().filter_map(|t| {
-          t.intersect(ray)
-        }).collect();
-        hits.sort_by(|a, b| a.distance.partial_cmp(&b.distance).unwrap());
-        mesh_candidates.with(|c| {
-          c.set(c.get() + candidate_count as u64)
-        });
-        hits.into_iter().next()
+        tree.intersect(ray)
       }
     }
   }

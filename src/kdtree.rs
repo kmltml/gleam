@@ -1,4 +1,4 @@
-use super::{ Ray, Triangle };
+use super::{ Ray, Triangle, Intersection };
 
 type Point = na::geometry::Point3<f64>;
 
@@ -96,11 +96,12 @@ impl Bounds {
     p.z >= self.min.z && p.z <= self.max.z
   }
 
-  fn intersects(&self, ray: &Ray) -> bool {
+  fn intersect(&self, ray: &Ray) -> Option<f64> {
     if self.contains(&ray.origin) {
-      return true
+      return Some(0.0)
     }
     // println!("{:?} , {:?}", self, ray);
+    let mut min_t: Option<f64> = None;
     for axis in Axis::axes() {
       for bound in &[self.min, self.max] {
         let b = axis.get(bound);
@@ -115,11 +116,17 @@ impl Bounds {
         let mut p = ray.origin + ray.direction * t;
         axis.set(&mut p, (axis.get(&self.min) + axis.get(&self.max)) / 2.0);
         if self.contains(&p) {
-          return true
+          let swap = match min_t {
+            None => true,
+            Some(previous_t) => t < previous_t
+          };
+          if swap {
+            min_t = Some(t);
         }
       }
     }
-    false
+    }
+    min_t
   }
 
   fn intersects_bounds(&self, other: &Bounds) -> bool {
@@ -158,8 +165,25 @@ impl Bounds {
     (Bounds {
       min: self.min, max: left_max
     }, Bounds {
-      min: right_min, max: self.min
+      min: right_min, max: self.max
     })
+  }
+
+}
+
+impl Node {
+
+  pub fn print_structure(&self) {
+    match self {
+      Node::Leaf { children } => print!("{}", children.len()),
+      Node::Partition { ref left, ref right, .. } => {
+        print!("(");
+        left.print_structure();
+        print!(" ");
+        right.print_structure();
+        print!(")");
+      }
+    }
   }
 
 }
@@ -227,31 +251,43 @@ impl KDTree {
     }
   }
 
-  pub fn intersect<'s, 'r>(&'s self, ray: &'r Ray) -> Vec<&'s Triangle> {
-
-    fn rec(node: &Node, bounds: &Bounds, ray: &Ray, candidates: &mut Vec<usize>) {
-      if !bounds.intersects(ray) {
-        return;
+  pub fn print_structure(&self) {
+    self.root.print_structure()
       }
+
+  pub fn intersect(&self, ray: &Ray) -> Option<Intersection> {
+
+    fn rec(node: &Node, bounds: &Bounds, ray: &Ray, elements: &Vec<Triangle>) -> Option<Intersection> {
       match *node {
         Node::Leaf { ref children } => {
-          candidates.extend(children);
+          children.iter()
+            .filter_map(|i| elements[*i].intersect(ray))
+            .min_by(|a, b| a.distance.partial_cmp(&b.distance).unwrap())
         },
         Node::Partition { axis, division, ref left, ref right } => {
           let (left_bounds, right_bounds) = bounds.split(axis, division);
-          rec(left, &left_bounds, ray, candidates);
-          rec(right, &right_bounds, ray, candidates);
+          let mut v: Vec<(f64, Bounds, &Box<Node>)> = vec![];
+          if let Some(t) = left_bounds.intersect(ray) {
+            v.push((t, left_bounds, left));
+          }
+          if let Some(t) = right_bounds.intersect(ray) {
+            v.push((t, right_bounds, right));
+          }
+          v.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+          for (_, b, n) in v {
+            if let i @ Some(_) = rec(n, &b, ray, elements) {
+              return i;
+            }
+          }
+          return None
         }
       }
     }
 
-    let mut ret = vec![];
-    rec(&self.root, &self.bounds, ray, &mut ret);
-    ret.sort();
-    ret.dedup();
-    ret.into_iter()
-      .map(|i| &self.elements[i])
-      .collect()
+    if let None = self.bounds.intersect(ray) {
+      return None;
+    }
+    rec(&self.root, &self.bounds, ray, &self.elements)
   }
 
 }

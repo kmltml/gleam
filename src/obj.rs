@@ -1,3 +1,5 @@
+use super::Triangle;
+
 use std::fs::File;
 use std::io;
 use std::io::BufRead;
@@ -5,8 +7,6 @@ use std::io::BufRead;
 use na::geometry::Point3;
 
 use regex::Regex;
-
-type Triangle = [Point3<f64>; 3];
 
 pub fn parse_file(f: &File) -> io::Result<Vec<Triangle>> {
   let mut triangles = Vec::new();
@@ -27,11 +27,11 @@ pub fn parse_file(f: &File) -> io::Result<Vec<Triangle>> {
       },
       Some('f') =>
         for captures in face_rx.captures_iter(&line) {
-          triangles.push([
+          triangles.push(Triangle::new([
             vertices[captures[1].parse::<usize>().unwrap() - 1],
             vertices[captures[2].parse::<usize>().unwrap() - 1],
             vertices[captures[3].parse::<usize>().unwrap() - 1]
-          ])
+          ]))
         },
       _ => {}
     }
