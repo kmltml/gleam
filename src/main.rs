@@ -173,7 +173,7 @@ thread_local! {
 fn draw_line(world: &World, camera: &Camera, y: u32, w: u32, h: u32) -> Vec<sfml::graphics::Color> {
   let mut line = Vec::with_capacity(w as usize);
 
-  let sample_count = 256;
+  let sample_count = 64;
 
   let yf = (y as i32 - h as i32 / 2) as f64 / ((h / 2) as f64);
   for x in 0 .. w {
@@ -525,19 +525,6 @@ impl Shape {
           }
         }
       }
-    }
-  }
-
-  fn normal(&self, point: &Point) -> Normal {
-    match self {
-      Shape::Sphere { center, .. } =>
-        na::Unit::new_normalize(point - center),
-      Shape::Plane { normal, .. } =>
-        *normal,
-      Shape::Triangle(Triangle { normal, .. }) =>
-        *normal,
-      Shape::Mesh { .. } | Shape::Transform { .. } =>
-        todo!()
     }
   }
 

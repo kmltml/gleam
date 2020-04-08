@@ -1,5 +1,7 @@
 use super::{ Intersection, Ray, Triangle, Vertex };
 
+use bit_vec::BitVec;
+
 type Point = na::geometry::Point3<f64>;
 
 #[derive(Copy, Clone, Debug)]
@@ -272,12 +274,17 @@ impl KDTree {
 
   pub fn intersect(&self, ray: &Ray) -> Option<Intersection> {
 
-    fn rec(node: &Node, bounds: &Bounds, ray: &Ray, elements: &Vec<Triangle>) -> Option<Intersection> {
+    fn rec(node: &Node, bounds: &Bounds, ray: &Ray, elements: &Vec<Triangle>, visited: &mut BitVec) -> Option<Intersection> {
       match *node {
         Node::Leaf { ref children } => {
-          children.iter()
+          let res = children.iter()
+            .filter(|i| !visited[**i])
             .filter_map(|i| elements[*i].intersect(ray))
-            .min_by(|a, b| a.distance.partial_cmp(&b.distance).unwrap())
+            .min_by(|a, b| a.distance.partial_cmp(&b.distance).unwrap());
+          for i in children {
+            visited.set(*i, true);
+          }
+          res
         },
         Node::Partition { axis, division, ref left, ref right } => {
           let (left_bounds, right_bounds) = bounds.split(axis, division);
@@ -290,7 +297,7 @@ impl KDTree {
           }
           v.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
           for (_, b, n) in v {
-            if let i @ Some(_) = rec(n, &b, ray, elements) {
+            if let i @ Some(_) = rec(n, &b, ray, elements, visited) {
               return i;
             }
           }
@@ -302,7 +309,8 @@ impl KDTree {
     if let None = self.bounds.intersect(ray) {
       return None;
     }
-    rec(&self.root, &self.bounds, ray, &self.elements)
+    let mut visited = BitVec::from_elem(self.elements.len(), false);
+    rec(&self.root, &self.bounds, ray, &self.elements, &mut visited)
   }
 
 }
