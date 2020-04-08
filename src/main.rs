@@ -39,22 +39,28 @@ fn main() {
       center: Point::new(0.0, -2.0, 0.0),
       normal: Normal::new_normalize(Vector::new(0.0, 1.0, 0.0))
     }, Material {
-      color: Color(Vector::new(1.0, 0.3, 0.3) * plane_dim),
-      roughness: 1.0
+      diffuse_color: Color(Vector::new(1.0, 0.3, 0.3) * plane_dim),
+      specular_color: Color(Vector::new(1.0, 1.0, 1.0) * plane_dim),
+      roughness: 1.0,
+      diffuse: 0.95
     }),
     (Shape::Plane {
       center: Point::new(-6.0, 0.0, 6.0),
       normal: Normal::new_normalize(Vector::new(1.0, 0.0, -1.0))
     }, Material {
-      color: Color(Vector::new(0.3, 1.0, 0.3) * plane_dim),
-      roughness: 1.0
+      diffuse_color: Color(Vector::new(0.3, 1.0, 0.3) * plane_dim),
+      specular_color: Color(Vector::new(1.0, 1.0, 1.0) * plane_dim),
+      roughness: 1.0,
+      diffuse: 0.95
     }),
     (Shape::Plane {
       center: Point::new(6.0, 0.0, 6.0),
       normal: Normal::new_normalize(Vector::new(-1.0, 0.0, -1.0))
     }, Material {
-      color: Color(Vector::new(0.3, 0.3, 1.0) * plane_dim),
-      roughness: 1.0
+      diffuse_color: Color(Vector::new(0.3, 0.3, 1.0) * plane_dim),
+      specular_color: Color(Vector::new(1.0, 1.0, 1.0) * plane_dim),
+      roughness: 1.0,
+      diffuse: 0.95
     }),
     (Shape::Transform {
       matrix: na::convert(
@@ -63,8 +69,10 @@ fn main() {
       ),
       child: Box::new(mesh_shape)
     }, Material {
-      color: Color(Vector::new(1.0, 1.0, 1.0)),
-      roughness: 0.2
+      diffuse_color: Color(Vector::new(0.5, 0.8, 1.0)),
+      specular_color: Color(Vector::new(1.0, 1.0, 1.0)),
+      roughness: 0.1,
+      diffuse: 0.8
     })
   ];
 
@@ -75,7 +83,7 @@ fn main() {
         center: Point::new(0.0, 5.0, 0.0),
         normal: Normal::new_normalize(Vector::new(0.0, -1.0, 0.0))
       }, Light {
-        color: Color(Vector::new(1.0, 1.0, 1.0))
+        color: Color(Vector::new(2.0, 2.0, 2.0))
       })
     ]
   });
@@ -173,7 +181,7 @@ thread_local! {
 fn draw_line(world: &World, camera: &Camera, y: u32, w: u32, h: u32) -> Vec<sfml::graphics::Color> {
   let mut line = Vec::with_capacity(w as usize);
 
-  let sample_count = 64;
+  let sample_count = 16;
 
   let yf = (y as i32 - h as i32 / 2) as f64 / ((h / 2) as f64);
   for x in 0 .. w {
@@ -209,7 +217,7 @@ fn cast_ray(world: &World, camera: &Camera, x: f64, y: f64) -> Color {
     direction: Vector::new(x * plane_size.x, y * plane_size.y, 1.0).normalize(),
     color: Color(Vector::new(1.0, 1.0, 1.0))
   };
-  for _ in 1..50 {
+  for _ in 1..10 {
     let mut shape: Option<(Intersection, &Material)> = None;
     for (s, m) in &world.shapes {
       if let Some(intersection) = s.intersect(&ray) {
@@ -298,6 +306,13 @@ impl ops::MulAssign<&Color> for Color {
   }
 }
 
+impl ops::MulAssign<f64> for Color {
+
+  fn mul_assign(&mut self, scalar: f64) {
+    self.0 *= scalar;
+  }
+}
+
 impl ops::DivAssign<f64> for Color {
 
   fn div_assign(&mut self, scalar: f64) {
@@ -360,7 +375,9 @@ enum Shape {
 }
 
 struct Material {
-  color: Color,
+  diffuse_color: Color,
+  specular_color: Color,
+  diffuse: f64,
   roughness: f64
 }
 
@@ -532,14 +549,30 @@ impl Shape {
 
 impl Ray {
 
-  fn reflect(&mut self, point: &Point, normal: &Normal, material: &Material, random: &mut ThreadRng) {
-    let normal_part = (self.direction.dot(normal)) * normal.as_ref();
-    let reflected_part = self.direction - normal_part;
-    self.direction = -normal_part + reflected_part;
-
+  fn deflect(&mut self, theta: f64, phi: f64) {
     let axis = Vector::x_axis().cross(&self.direction);
     let angle = self.direction.x.acos();
     let transform = na::Rotation3::from_axis_angle(&na::Unit::new_normalize(axis), angle);
+
+    let dir_pre = Vector::new(theta.cos(), theta.sin() * phi.sin(), theta.sin() * phi.cos());
+    self.direction = transform * dir_pre;
+  }
+
+  fn reflect(&mut self, point: &Point, normal: &Normal, material: &Material, random: &mut ThreadRng) {
+    if random.gen_bool(material.diffuse) {
+      self.direction = *normal.as_ref();
+      self.deflect(/*random.gen_range(0.0, std::f64::consts::PI / 2.0),*/
+                   (random.gen_range(0.0, 1.0) as f64).acos(),
+                   random.gen_range(0.0, 2.0 * std::f64::consts::PI));
+      self.color *= normal.dot(&self.direction.normalize()).abs();
+      self.color *= &material.diffuse_color;
+      if self.direction.dot(normal) < 0.0 {
+        println!("Something's wrong with the dot")
+      }
+    } else {
+      let normal_part = (self.direction.dot(normal)) * normal.as_ref();
+      let reflected_part = self.direction - normal_part;
+      let direction = -normal_part + reflected_part;
 
     let distr = rand::distributions::Normal::new(0.0, material.roughness);
     let mut attempts = 0;
@@ -547,10 +580,10 @@ impl Ray {
       let theta = distr.sample(random);
       let phi = random.gen_range(0.0, 2.0 * std::f64::consts::PI);
 
-      let dir_pre = Vector::new(theta.cos(), theta.sin() * phi.sin(), theta.sin() * phi.cos());
-      let direction = transform * dir_pre;
-      if direction.dot(normal).signum() == self.direction.dot(normal).signum() {
         self.direction = direction;
+        self.deflect(theta, phi);
+
+        if direction.dot(normal).signum() == self.direction.dot(normal).signum() {
         break;
       }
 
@@ -560,8 +593,9 @@ impl Ray {
         break;
       }
     }
+      self.color *= &material.specular_color;
+    }
 
-    self.color *= &material.color;
     self.origin = *point;
   }
 
