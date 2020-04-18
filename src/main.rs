@@ -561,8 +561,7 @@ impl Ray {
   fn reflect(&mut self, point: &Point, normal: &Normal, material: &Material, random: &mut ThreadRng) {
     if random.gen_bool(material.diffuse) {
       self.direction = *normal.as_ref();
-      self.deflect(/*random.gen_range(0.0, std::f64::consts::PI / 2.0),*/
-                   (random.gen_range(0.0, 1.0) as f64).acos(),
+      self.deflect((random.gen_range(0.0, 1.0) as f64).acos(),
                    random.gen_range(0.0, 2.0 * std::f64::consts::PI));
       self.color *= normal.dot(&self.direction.normalize()).abs();
       self.color *= &material.diffuse_color;
